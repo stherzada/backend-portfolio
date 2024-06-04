@@ -4,6 +4,8 @@ from fastapi import FastAPI, HTTPException
 
 from fast_zero.schemas import Message, UserDB, UserList, UserPublic, UserSchema
 
+from fast_zero.security import get_password_hash
+
 app = FastAPI()
 database = []
 
@@ -14,10 +16,38 @@ def read_root():
 
 
 @app.post('/users/', status_code=HTTPStatus.CREATED, response_model=UserPublic)
-def create_user(user: UserSchema):
-    user_with_id = UserDB(**user.model_dump(), id=len(database) + 1)
-    database.append(user_with_id)
-    return user_with_id
+def create_user(user: UserSchema, session: Session = Depends(get_session)):
+    db_user = session.scalar(
+        select(User).where(
+            or_(User.username == user.username, User.email == user.email)
+        )
+    )
+
+    if db_user:
+        if db_user.username == user.username:
+            raise HTTPException(
+                status_code=HTTPStatus.BAD_REQUEST,
+                detail='Username already exists',
+            )
+        elif db_user.email == user.email:
+            raise HTTPException(
+                status_code=HTTPStatus.BAD_REQUEST,
+                detail='Email already exists',
+            )
+
+    hashed_password = get_password_hash(user.password)
+
+    db_user = User(
+        email=user.email,
+        username=user.username,
+        password=hashed_password,
+    )
+
+    session.add(db_user)
+    session.commit()
+    session.refresh(db_user)
+
+    return db_user
 
 
 @app.get('/users/', response_model=UserList)
@@ -52,12 +82,12 @@ def delete_user(user_id: int):
     return {'message': 'User deleted'}
 
 
-# @app.get('/users/{user_id}', response_model=UserList)
-# def read_user(user_id: int):
-#     if user_id > len(database) or user_id < 1:
-#         raise HTTPException(
-#             status_code=HTTPStatus.NOT_FOUND,
-#             detail='User not found',
-#         )
+@app.get('/users/{user_id}', response_model=UserList)
+def read_user(user_id: int):
+    if user_id > len(database) or user_id < 1:
+        raise HTTPException(
+            status_code=HTTPStatus.NOT_FOUND,
+            detail='User not found',
+        )
 
-#     return {'users': [database[user_id - 1]]}
+    return {'users': [database[user_id - 1]]}
